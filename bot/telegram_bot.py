@@ -4,7 +4,6 @@ import itertools
 import asyncio
 
 import telegram
-from uuid import uuid4
 from telegram import constants
 from telegram import Message, MessageEntity, Update, InlineQueryResultArticle, InputTextMessageContent, BotCommand, ChatMember
 from telegram.error import RetryAfter, TimedOut
@@ -14,6 +13,9 @@ from telegram.ext import ApplicationBuilder, ContextTypes, CommandHandler, Messa
 from pydub import AudioSegment
 from openai_helper import OpenAIHelper
 from usage_tracker import UsageTracker
+
+import pyttsx3
+import time
 
 
 def message_text(message: Message) -> str:
@@ -44,16 +46,18 @@ class ChatGPTTelegramBot:
         self.config = config
         self.openai = openai
         self.commands = [
-            BotCommand(command='help', description='Show help message'),
-            BotCommand(command='reset', description='Reset the conversation. Optionally pass high-level instructions '
-                                                    '(e.g. /reset You are a helpful assistant)'),
-            BotCommand(command='image', description='Generate image from prompt (e.g. /image cat)'),
-            BotCommand(command='stats', description='Get your current usage statistics'),
-            BotCommand(command='resend', description='Resend the latest message')
+            BotCommand(command='help', description='Показать справочное сообщение'),
+            BotCommand(command='reset', description='Сбросить разговор. Опционально передавать высокоуровневые инструкции'
+                                                    '(например, /reset Вы полезный помощник)'),
+            BotCommand(command='resetrus', description='Сбросить разговор. Будет писать на русском'),
+            BotCommand(command='image', description='Создать изображение из подсказки (например, /image cat)'),
+            
+            #BotCommand(command='stats', description='Получите текущую статистику использования'),
+            BotCommand(command='resend', description='Отправить последнее сообщение повторно')
         ]
-        self.disallowed_message = "Sorry, you are not allowed to use this bot. You can check out the source code at " \
+        self.disallowed_message = "Извините, вам не разрешено использовать этого бота. Вы можете проверить исходный код на " \
                                   "https://github.com/n3d1117/chatgpt-telegram-bot"
-        self.budget_limit_message = "Sorry, you have reached your monthly usage limit."
+        self.budget_limit_message = "Извините, вы достигли месячного лимита использования."
         self.usage = {}
         self.last_message = {}
 
@@ -62,11 +66,11 @@ class ChatGPTTelegramBot:
         Shows the help menu.
         """
         commands = [f'/{command.command} - {command.description}' for command in self.commands]
-        help_text = 'I\'m a ChatGPT bot, talk to me!' + \
+        help_text = 'Я бот ChatGPT, поговорите со мной!' + \
                     '\n\n' + \
                     '\n'.join(commands) + \
                     '\n\n' + \
-                    'Send me a voice message or file and I\'ll transcribe it for you!' + \
+                    'Отправьте мне голосовое сообщение или файл, и я расшифрую его для вас!' + \
                     '\n\n' + \
                     "Open source at https://github.com/n3d1117/chatgpt-telegram-bot"
         await update.message.reply_text(help_text, disable_web_page_preview=True)
@@ -119,6 +123,9 @@ class ChatGPTTelegramBot:
             text_budget += f"You have a remaining budget of ${budget:.2f} this month.\n"
         # add OpenAI account information for admin request
         if self.is_admin(update):
+            grant_balance = self.openai.get_grant_balance()
+            if grant_balance > 0.0:
+                text_budget += f"Your remaining OpenAI grant balance is ${grant_balance:.2f}.\n"
             text_budget += f"Your OpenAI account was billed ${self.openai.get_billing_current_month():.2f} this month."
         
         usage_text = text_current_conversation + text_today + text_month + text_budget
@@ -155,29 +162,48 @@ class ChatGPTTelegramBot:
         """
         if not await self.is_allowed(update, context):
             logging.warning(f'User {update.message.from_user.name} (id: {update.message.from_user.id}) '
-                f'is not allowed to reset the conversation')
+                f'не имеет права сбросить диалог')
             await self.send_disallowed_message(update, context)
             return
 
-        logging.info(f'Resetting the conversation for user {update.message.from_user.name} '
+        logging.info(f'Сброс разговора для пользователя {update.message.from_user.name} '
             f'(id: {update.message.from_user.id})...')
 
         chat_id = update.effective_chat.id
         reset_content = message_text(update.message)
         self.openai.reset_chat_history(chat_id=chat_id, content=reset_content)
-        await context.bot.send_message(chat_id=chat_id, text='Done!')
+        await context.bot.send_message(chat_id=chat_id, text='Сделанно!')
+    
+    async def resetRU(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """
+        Restarts conversation in Russian.
+        """
+        if not await self.is_allowed(update, context):
+            logging.warning(f'User {update.message.from_user.name} (id: {update.message.from_user.id}) '
+                f'не имеет права сбросить диалог')
+            await self.send_disallowed_message(update, context)
+            return
+
+        logging.info(f'Сброс разговора для пользователя {update.message.from_user.name} '
+            f'(id: {update.message.from_user.id})...')
+
+        chat_id = update.effective_chat.id
+        reset_content = 'Пиши на русском'
+        self.openai.reset_chat_history(chat_id=chat_id, content=reset_content)
+        await context.bot.send_message(chat_id=chat_id, text='Сделанно!')
+
 
     async def image(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """
         Generates an image for the given prompt using DALL·E APIs
         """
-        if not self.config['enable_image_generation'] or not await self.check_allowed_and_within_budget(update, context):
+        if not await self.check_allowed_and_within_budget(update, context):
             return
 
         chat_id = update.effective_chat.id
         image_query = message_text(update.message)
         if image_query == '':
-            await context.bot.send_message(chat_id=chat_id, text='Please provide a prompt! (e.g. /image cat)')
+            await context.bot.send_message(chat_id=chat_id, text='Пожалуйста, дайте подсказку! (например, /изображение кота)')
             return
 
         logging.info(f'New image generation request received from user {update.message.from_user.name} '
@@ -188,7 +214,7 @@ class ChatGPTTelegramBot:
                 image_url, image_size = await self.openai.generate_image(prompt=image_query)
                 await context.bot.send_photo(
                     chat_id=chat_id,
-                    reply_to_message_id=self.get_reply_to_message_id(update),
+                    reply_to_message_id=update.message.message_id,
                     photo=image_url
                 )
                 # add image request to users usage tracker
@@ -202,7 +228,7 @@ class ChatGPTTelegramBot:
                 logging.exception(e)
                 await context.bot.send_message(
                     chat_id=chat_id,
-                    reply_to_message_id=self.get_reply_to_message_id(update),
+                    reply_to_message_id=update.message.message_id,
                     text=f'Failed to generate image: {str(e)}',
                     parse_mode=constants.ParseMode.MARKDOWN
                 )
@@ -213,7 +239,7 @@ class ChatGPTTelegramBot:
         """
         Transcribe audio messages.
         """
-        if not self.config['enable_transcription'] or not await self.check_allowed_and_within_budget(update, context):
+        if not await self.check_allowed_and_within_budget(update, context):
             return
 
         if self.is_group_chat(update) and self.config['ignore_group_transcriptions']:
@@ -233,7 +259,7 @@ class ChatGPTTelegramBot:
                 logging.exception(e)
                 await context.bot.send_message(
                     chat_id=chat_id,
-                    reply_to_message_id=self.get_reply_to_message_id(update),
+                    reply_to_message_id=update.message.message_id,
                     text=f'Failed to download audio file: {str(e)}. Make sure the file is not too large. (max 20MB)',
                     parse_mode=constants.ParseMode.MARKDOWN
                 )
@@ -250,8 +276,8 @@ class ChatGPTTelegramBot:
                 logging.exception(e)
                 await context.bot.send_message(
                     chat_id=update.effective_chat.id,
-                    reply_to_message_id=self.get_reply_to_message_id(update),
-                    text='Unsupported file type'
+                    reply_to_message_id=update.message.message_id,
+                    text='Неподдерживаемый тип файла'
                 )
                 if os.path.exists(filename):
                     os.remove(filename)
@@ -275,21 +301,29 @@ class ChatGPTTelegramBot:
                 allowed_user_ids = self.config['allowed_user_ids'].split(',')
                 if str(user_id) not in allowed_user_ids and 'guests' in self.usage:
                     self.usage["guests"].add_transcription_seconds(audio_track.duration_seconds, transcription_price)
-
+                
+                self.config['voice_reply_transcript'] = False
+                
                 if self.config['voice_reply_transcript']:
 
                     # Split into chunks of 4096 characters (Telegram's message limit)
-                    transcript_output = f'_Transcript:_\n"{transcript}"'
+                    transcript_output = f'_Транскрипция:_\n"{transcript}"'
                     chunks = self.split_into_chunks(transcript_output)
 
                     for index, transcript_chunk in enumerate(chunks):
                         await context.bot.send_message(
                             chat_id=chat_id,
-                            reply_to_message_id=self.get_reply_to_message_id(update) if index == 0 else None,
+                            reply_to_message_id=update.message.message_id if index == 0 else None,
                             text=transcript_chunk,
                             parse_mode=constants.ParseMode.MARKDOWN
                         )
                 else:
+
+                    engine = pyttsx3.init('sapi5')
+
+                    engine.setProperty('rate', 200) # скорость речи
+                    engine.setProperty('volume', 1) # громкость речи
+
                     # Get the response of the transcript
                     response, total_tokens = await self.openai.get_chat_response(chat_id=chat_id, query=transcript)
 
@@ -300,22 +334,40 @@ class ChatGPTTelegramBot:
                         self.usage["guests"].add_chat_tokens(total_tokens, self.config['token_price'])
 
                     # Split into chunks of 4096 characters (Telegram's message limit)
-                    transcript_output = f'_Transcript:_\n"{transcript}"\n\n_Answer:_\n{response}'
+                    transcript_output = f'_Транскрипция:_\n"{transcript}"\n\n_Ответ:_\n{response}'
                     chunks = self.split_into_chunks(transcript_output)
+                    text = ''.join(chunks)
+                    text = text.split('_Ответ:_\n')
+                    text_f = text[-1]
+                    
+                    file_path = "temp_sound.mp3"
+
+                    if os.path.exists(file_path):
+                        os.remove(file_path)
+
+                    engine.save_to_file(text_f, 'temp_sound.mp3')
+                    engine.runAndWait()
+                    time.sleep(0.5)
 
                     for index, transcript_chunk in enumerate(chunks):
                         await context.bot.send_message(
                             chat_id=chat_id,
-                            reply_to_message_id=self.get_reply_to_message_id(update) if index == 0 else None,
+                            reply_to_message_id=update.message.message_id if index == 0 else None,
                             text=transcript_chunk,
                             parse_mode=constants.ParseMode.MARKDOWN
                         )
+
+                    audio_file = open('temp_sound.mp3', 'rb')
+                    await context.bot.send_audio(chat_id=chat_id, audio=audio_file)
+                    audio_file.close()
+
+                    os.remove(file_path)
 
             except Exception as e:
                 logging.exception(e)
                 await context.bot.send_message(
                     chat_id=chat_id,
-                    reply_to_message_id=self.get_reply_to_message_id(update),
+                    reply_to_message_id=update.message.message_id,
                     text=f'Failed to transcribe text: {str(e)}',
                     parse_mode=constants.ParseMode.MARKDOWN
                 )
@@ -343,7 +395,7 @@ class ChatGPTTelegramBot:
 
         if self.is_group_chat(update):
             trigger_keyword = self.config['group_trigger_keyword']
-            if prompt.lower().startswith(trigger_keyword.lower()):
+            if prompt.startswith(trigger_keyword):
                 prompt = prompt[len(trigger_keyword):].strip()
             else:
                 if update.message.reply_to_message and update.message.reply_to_message.from_user.id == context.bot.id:
@@ -401,7 +453,7 @@ class ChatGPTTelegramBot:
                                                                  message_id=sent_message.message_id)
                             sent_message = await context.bot.send_message(
                                 chat_id=chat_id,
-                                reply_to_message_id=self.get_reply_to_message_id(update),
+                                reply_to_message_id=update.message.message_id,
                                 text=content
                             )
                         except:
@@ -414,6 +466,7 @@ class ChatGPTTelegramBot:
                             use_markdown = tokens != 'not_finished'
                             await self.edit_message_with_retry(context, chat_id, sent_message.message_id,
                                                                text=content, markdown=use_markdown)
+                            #print(content) +
 
                         except RetryAfter as e:
                             backoff += 5
@@ -446,7 +499,7 @@ class ChatGPTTelegramBot:
                         try:
                             await context.bot.send_message(
                                 chat_id=chat_id,
-                                reply_to_message_id=self.get_reply_to_message_id(update) if index == 0 else None,
+                                reply_to_message_id=update.message.message_id if index == 0 else None,
                                 text=chunk,
                                 parse_mode=constants.ParseMode.MARKDOWN
                             )
@@ -454,7 +507,7 @@ class ChatGPTTelegramBot:
                             try:
                                 await context.bot.send_message(
                                     chat_id=chat_id,
-                                    reply_to_message_id=self.get_reply_to_message_id(update) if index == 0 else None,
+                                    reply_to_message_id=update.message.message_id if index == 0 else None,
                                     text=chunk
                                 )
                             except Exception as e:
@@ -476,7 +529,7 @@ class ChatGPTTelegramBot:
             logging.exception(e)
             await context.bot.send_message(
                 chat_id=chat_id,
-                reply_to_message_id=self.get_reply_to_message_id(update),
+                reply_to_message_id=update.message.message_id,
                 text=f'Failed to get response: {str(e)}',
                 parse_mode=constants.ParseMode.MARKDOWN
             )
@@ -492,7 +545,7 @@ class ChatGPTTelegramBot:
 
         results = [
             InlineQueryResultArticle(
-                id=str(uuid4()),
+                id=query,
                 title='Ask ChatGPT',
                 input_message_content=InputTextMessageContent(query),
                 description=query,
@@ -734,16 +787,6 @@ class ChatGPTTelegramBot:
 
         return True
 
-    def get_reply_to_message_id(self, update: Update):
-        """
-        Returns the message id of the message to reply to
-        :param update: Telegram update object
-        :return: Message id of the message to reply to, or None if quoting is disabled
-        """
-        if self.config['enable_quoting'] or self.is_group_chat(update):
-            return update.message.message_id
-        return None
-
     def split_into_chunks(self, text: str, chunk_size: int = 4096) -> list[str]:
         """
         Splits a string into chunks of a given size.
@@ -769,6 +812,7 @@ class ChatGPTTelegramBot:
             .build()
 
         application.add_handler(CommandHandler('reset', self.reset))
+        application.add_handler(CommandHandler('resetrus', self.resetRU))
         application.add_handler(CommandHandler('help', self.help))
         application.add_handler(CommandHandler('image', self.image))
         application.add_handler(CommandHandler('start', self.help))

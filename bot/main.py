@@ -6,7 +6,6 @@ from dotenv import load_dotenv
 from openai_helper import OpenAIHelper, default_max_tokens
 from telegram_bot import ChatGPTTelegramBot
 
-
 def main():
     # Read .env file
     load_dotenv()
@@ -40,17 +39,14 @@ def main():
         'temperature': float(os.environ.get('TEMPERATURE', 1.0)),
         'image_size': os.environ.get('IMAGE_SIZE', '512x512'),
         'model': model,
-        'presence_penalty': float(os.environ.get('PRESENCE_PENALTY', 0.0)),
-        'frequency_penalty': float(os.environ.get('FREQUENCY_PENALTY', 0.0)),
+        'presence_penalty': int(os.environ.get('PRESENCE_PENALTY', 0)),
+        'frequency_penalty': int(os.environ.get('FREQUENCY_PENALTY', 0)),
     }
 
     telegram_config = {
         'token': os.environ['TELEGRAM_BOT_TOKEN'],
         'admin_user_ids': os.environ.get('ADMIN_USER_IDS', '-'),
         'allowed_user_ids': os.environ.get('ALLOWED_TELEGRAM_USER_IDS', '*'),
-        'enable_quoting': os.environ.get('ENABLE_QUOTING', 'true').lower() == 'true',
-        'enable_image_generation': os.environ.get('ENABLE_IMAGE_GENERATION', 'true').lower() == 'true',
-        'enable_transcription': os.environ.get('ENABLE_TRANSCRIPTION', 'true').lower() == 'true',
         'monthly_user_budgets': os.environ.get('MONTHLY_USER_BUDGETS', '*'),
         'monthly_guest_budget': float(os.environ.get('MONTHLY_GUEST_BUDGET', '100.0')),
         'stream': os.environ.get('STREAM', 'true').lower() == 'true',
