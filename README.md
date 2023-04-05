@@ -26,6 +26,7 @@ A [Telegram bot](https://core.telegram.org/bots/api) that integrates with OpenAI
 - [x] (NEW!) Stream support
 - [x] (NEW!) GPT-4 support
   - If you have access to the GPT-4 API, simply change the `OPENAI_MODEL` parameter to `gpt-4`
+- [x] (NEW!) Responds not only with text, but also with voice messages to incoming voice messages.
 
 ## Additional features - help needed!
 If you'd like to help, check out the [issues](https://github.com/n3d1117/chatgpt-telegram-bot/issues) section and contribute!
